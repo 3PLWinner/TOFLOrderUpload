@@ -12,10 +12,10 @@ st.set_page_config(
 )
 
 # Load credentials from environment variables
-LOGIN_URL = os.getenv("LOGIN_URL", "https://wms.3plwinner.com/VeraCore/Public.Api")
-USERNAME = os.getenv("USERNAME")
-PASSWORD = os.getenv("PASSWORD")
-SYSTEM_ID = os.getenv("SYSTEM_ID")
+LOGIN_URL = "https://wms.3plwinner.com/VeraCore/Public.Api"
+USERNAME = "SFDWUSER"
+PASSWORD = "Inkypinky343"
+SYSTEM_ID = "CUS598"
 
 class VeraCoreOrderClient:
     def __init__(self, base_url, system_id):
