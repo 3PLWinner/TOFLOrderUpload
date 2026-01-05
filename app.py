@@ -1,385 +1,321 @@
 import streamlit as st
 import requests
 import pandas as pd
-from datetime import datetime, timedelta
+import datetime
 import os
+from dotenv import load_dotenv
+from pathlib import Path
+load_dotenv(dotenv_path=Path('.env'), override=True)
 
-# Page configuration
-st.set_page_config(
-    page_title="VeraCore Order Status Checker",
-    page_icon="📦",
-    layout="wide"
-)
+st.logo("3plwinner-logo.png", size="large", link="https://3plwinner.com")
 
-# Load credentials from environment variables
-LOGIN_URL = "https://wms.3plwinner.com/VeraCore/Public.Api"
-USERNAME = "SFDWUSER"
-PASSWORD = "Inkypinky343"
-SYSTEM_ID = "CUS598"
+st.set_page_config(page_title="Order Upload")
 
-class VeraCoreOrderClient:
-    def __init__(self, base_url, system_id):
-        self.base_url = base_url.rstrip('/')
-        self.system_id = system_id
-        self.token = None
-        self.token_expiration = None
-    
-    def authenticate(self, username, password):
-        """Authenticate with the VeraCore API and get a token"""
-        login_url = f"{self.base_url}/api/login"
-        
-        payload = {
-            "userName": username,
-            "password": password,
-            "systemId": self.system_id
-        }
-        
-        try:
-            response = requests.post(login_url, json=payload, timeout=10)
-            response.raise_for_status()
-            
-            data = response.json()
-            if data.get('Token'):
-                self.token = data['Token']
-                self.token_expiration = data.get('UtcExpirationDate')
-                return True, f"Authentication successful. Token expires: {self.token_expiration}"
-            else:
-                error_msg = data.get('Error', 'Unknown error')
-                return False, f"Authentication failed: {error_msg}"
-                
-        except requests.exceptions.RequestException as e:
-            return False, f"Authentication error: {str(e)}"
-    
-    def check_token_status(self):
-        """Check if token is still valid"""
-        if not self.token:
-            return False, "No token available"
-        
-        status_url = f"{self.base_url}/api/token"
-        headers = {"Authorization": f"bearer {self.token}"}
-        
-        try:
-            response = requests.get(status_url, headers=headers, timeout=10)
-            if response.status_code == 200:
-                status = response.json()
-                is_valid = "valid" in str(status).lower()
-                return is_valid, f"Token status: {status}"
-            return False, f"Token check failed: {response.status_code}"
-        except requests.exceptions.RequestException as e:
-            return False, f"Token check error: {str(e)}"
-    
-    def get_orders(self, status=None, carrier_code=None, start_date=None, end_date=None):
-        """Get orders from the VeraCore API"""
-        if not self.token:
-            return None, "Not authenticated"
-        
-        orders_url = f"{self.base_url}/api/Orders"
-        
-        params = {}
-        if status:
-            params['request.status'] = status
-        if carrier_code:
-            params['request.carrierCode'] = carrier_code
-        if start_date:
-            params['request.streamAssignedUTCStartDate'] = start_date
-        if end_date:
-            params['request.streamAssignedUTCEndDate'] = end_date
-        
-        headers = {
-            'Authorization': f'bearer {self.token}'
-        }
-        
-        try:
-            response = requests.get(orders_url, headers=headers, params=params, timeout=30)
-            response.raise_for_status()
-            return response.json(), None
-            
-        except requests.exceptions.RequestException as e:
-            return None, f"Error fetching orders: {str(e)}"
+st.title("Order Upload System")
 
-def parse_orders_to_dataframe(orders_data):
-    """Convert orders data to a pandas DataFrame for display"""
-    if not orders_data or 'Orders' not in orders_data:
-        return pd.DataFrame()
-    
-    orders = orders_data['Orders']
-    if not orders:
-        return pd.DataFrame()
-    
-    rows = []
-    for order in orders:
-        ordered_by = order.get('OrderedBy', {})
-        order_dates = order.get('OrderDates', {})
-        shipments = order.get('Shipments', [])
-        
-        # Count total items
-        total_items = 0
-        carriers = set()
-        for shipment in shipments:
-            for unit in shipment.get('ShippingUnits', []):
-                total_items += len(unit.get('Items', []))
-                carrier = unit.get('RequestedFreightCarrier', 'N/A')
-                if carrier:
-                    carriers.add(carrier)
-        
-        row = {
-            'Order ID': order['ID'],
-            'Status': order['CurrentOrderStatus'],
-            'Customer': ordered_by.get('Name', 'N/A'),
-            'City': ordered_by.get('City', 'N/A'),
-            'State': ordered_by.get('State', 'N/A'),
-            'Order Date': order_dates.get('UTCOrderDate', 'N/A'),
-            'Shipments': len(shipments),
-            'Total Items': total_items,
-            'Carriers': ', '.join(carriers) if carriers else 'N/A'
-        }
-        rows.append(row)
-    
-    return pd.DataFrame(rows)
+USERNAME = os.getenv("USERNAME")
+PASSWORD = os.getenv("PASSWORD")
 
-def display_order_details(order):
-    """Display detailed information about a single order"""
-    st.subheader(f"Order #{order['ID']}")
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.metric("Status", order['CurrentOrderStatus'])
-        order_dates = order.get('OrderDates', {})
-        st.write(f"**Order Date:** {order_dates.get('UTCOrderDate', 'N/A')}")
-        if order.get('PurchaseOrder'):
-            st.write(f"**PO:** {order['PurchaseOrder']}")
-    
-    with col2:
-        ordered_by = order.get('OrderedBy', {})
-        st.write("**Customer Information:**")
-        st.write(f"{ordered_by.get('Name', 'N/A')}")
-        st.write(f"{ordered_by.get('Address1', 'N/A')}")
-        st.write(f"{ordered_by.get('City', 'N/A')}, {ordered_by.get('State', 'N/A')} {ordered_by.get('PostalCode', 'N/A')}")
-        if ordered_by.get('Email'):
-            st.write(f"**Email:** {ordered_by['Email']}")
-        if ordered_by.get('Phone'):
-            st.write(f"**Phone:** {ordered_by['Phone']}")
-    
-    with col3:
-        shipments = order.get('Shipments', [])
-        st.metric("Number of Shipments", len(shipments))
-        order_class = order.get('OrderClassification', {})
-        if order_class.get('OrderProcessingStream'):
-            st.write(f"**Stream:** {order_class['OrderProcessingStream']}")
-    
-    # Display shipments
-    st.write("---")
-    st.write("**Shipment Details:**")
-    
-    for idx, shipment in enumerate(shipments, 1):
-        with st.expander(f"Shipment {idx}", expanded=(len(shipments) == 1)):
-            ship_to = shipment.get('ShipTo', {})
-            st.write(f"**Ship To:** {ship_to.get('Name', 'N/A')}")
-            st.write(f"{ship_to.get('Address1', 'N/A')}, {ship_to.get('City', 'N/A')}, {ship_to.get('State', 'N/A')} {ship_to.get('PostalCode', 'N/A')}")
-            
-            shipping_units = shipment.get('ShippingUnits', [])
-            for unit_idx, unit in enumerate(shipping_units, 1):
-                st.write(f"**Shipping Method:** {unit.get('RequestedShippingOption', 'N/A')}")
-                st.write(f"**Carrier:** {unit.get('RequestedFreightCarrier', 'N/A')} ({unit.get('RequestedFreightCode', 'N/A')})")
-                st.write(f"**Weight:** {unit.get('TotalWeight', 'N/A')} {unit.get('TotalWeightType', '')}")
-                
-                # Display items
-                items = unit.get('Items', [])
-                if items:
-                    st.write("**Items:**")
-                    items_data = []
-                    for item in items:
-                        products = item.get('Products', [])
-                        for product in products:
-                            pricing = item.get('Pricing', {})
-                            price = pricing.get('Price', 0)
-                            qty = item['QuantityOrdered']
-                            
-                            items_data.append({
-                                'Line': item.get('LineNumber', ''),
-                                'Product ID': item['ID'],
-                                'Title': item['Title'],
-                                'Quantity': qty,
-                                'Price': f"${price:.2f}" if price else 'N/A',
-                                'Total': f"${price * qty:.2f}" if price else 'N/A'
-                            })
-                    
-                    items_df = pd.DataFrame(items_data)
-                    st.dataframe(items_df, use_container_width=True, hide_index=True)
-            
-            # Display return address
-            return_addr = shipment.get('ReturnAddress', {})
-            if return_addr.get('Company') or return_addr.get('Address1'):
-                st.write("**Return Address:**")
-                st.write(f"{return_addr.get('Company', 'N/A')}")
-                st.write(f"{return_addr.get('Address1', '')}, {return_addr.get('City', '')}, {return_addr.get('State', '')} {return_addr.get('PostalCode', '')}")
+def escape_xml(text):
+    """Escape special characters for XML"""
+    if not text or pd.isna(text):
+        return ""
+    text = str(text)
+    text = text.replace("&", "&amp;")
+    text = text.replace("<", "&lt;")
+    text = text.replace(">", "&gt;")
+    text = text.replace('"', "&quot;")
+    text = text.replace("'", "&apos;")
+    return text
 
-# Initialize session state
-if 'client' not in st.session_state:
-    st.session_state.client = None
-if 'authenticated' not in st.session_state:
-    st.session_state.authenticated = False
-if 'orders_data' not in st.session_state:
-    st.session_state.orders_data = None
+def generate_order_xml(username, password, order_id, offers):
+    """Generate XML for order submission"""
+    
+    offers_xml = ""
+    for offer in offers:
+        offers_xml += f"""
+                    <OfferOrdered>
+                        <Offer>
+                            <Header>
+                                <ID>{escape_xml(offer['Offer ID'])}</ID>
+                            </Header>
+                        </Offer>
+                        <Quantity>{int(offer['Quantity'])}</Quantity>
+                        <OrderShipTo>
+                            <Key>1</Key>
+                        </OrderShipTo>
+                    </OfferOrdered>"""
+    
+    first = offers[0]
+    
+    ref_nums = [str(o['Reference #']) for o in offers if o['Reference #']]
+    ref_string = ",".join(ref_nums)[:50] if ref_nums else ""
+    
+    return f"""<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope
+    xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+    <soap:Header>
+        <AuthenticationHeader xmlns="http://omscom/">
+            <Username>{USERNAME}</Username>
+            <Password>{PASSWORD}</Password>
+        </AuthenticationHeader>
+    </soap:Header>
+    <soap:Body>
+        <AddOrder xmlns="http://omscom/">
+            <order>
+                <Header>
+                    <ID>{escape_xml(str(order_id))}</ID>
+                    <EntryDate>{datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")}</EntryDate>
+                    <Comments>{escape_xml(first.get('Order Comments', ''))}</Comments>
+                    <ReferenceNumber>{escape_xml(ref_string)}</ReferenceNumber>
+                </Header>
+                <Money></Money>
+                <Payment></Payment>
+                <OrderVariables>
+                    <OrderVariable>
+                        <VariableField>
+                            <FieldName>Order Type</FieldName>
+                        </VariableField>
+                        <Value>True</Value>
+                        <ValueDescription>B2B</ValueDescription>
+                    </OrderVariable>
+                </OrderVariables>
+                <OrderedBy>
+                    <FirstName>{escape_xml(first.get('First Name', ''))}</FirstName>
+                    <LastName>{escape_xml(first.get('Last Name', ''))}</LastName>
+                    <Address1>{escape_xml(first.get('Address 1', ''))}</Address1>
+                    <Address2>{escape_xml(first.get('Address 2', ''))}</Address2>
+                    <Address3>{escape_xml(first.get('Address 3', ''))}</Address3>
+                    <City>{escape_xml(first.get('City', ''))}</City>
+                    <State>{escape_xml(first.get('State', ''))}</State>
+                    <PostalCode>{escape_xml(str(first.get('Postal Code', '')))}</PostalCode>
+                    <Country>{escape_xml(first.get('Country', ''))}</Country>
+                </OrderedBy>
+                <ShipTo>
+                    <OrderShipTo>
+                        <Flag>OrderedBy</Flag>
+                        <Key>1</Key>
+                    </OrderShipTo>
+                </ShipTo>
+                <BillTo>
+                    <Flag>OrderedBy</Flag>
+                </BillTo>
+                <Offers>
+                    {offers_xml}
+                </Offers>
+            </order>
+        </AddOrder>
+    </soap:Body>
+</soap:Envelope>"""
 
-# Main app
-def main():
-    st.title("📦 VeraCore Order Status Checker")
-    
-    # Check for required environment variables
-    if not all([LOGIN_URL, USERNAME, PASSWORD, SYSTEM_ID]):
-        st.error("⚠️ Missing environment variables. Please configure LOGIN_URL, USERNAME, PASSWORD, and SYSTEM_ID.")
-        st.stop()
-    
-    # Auto-authenticate on first load
-    if not st.session_state.authenticated:
-        with st.spinner("Authenticating..."):
-            client = VeraCoreOrderClient(LOGIN_URL, SYSTEM_ID)
-            auth_success, auth_message = client.authenticate(USERNAME, PASSWORD)
+uploaded_file = st.file_uploader("Upload Order CSV File", type=['csv'])
+
+if uploaded_file:
+    try:
+        df = pd.read_csv(uploaded_file)
+        df.columns = df.columns.str.strip()
+        df = df.fillna("")
         
-        if auth_success:
-            st.session_state.client = client
-            st.session_state.authenticated = True
-            st.success(f"✅ {auth_message}")
-        else:
-            st.error(f"❌ {auth_message}")
+        st.success(f"✅ File uploaded successfully: {uploaded_file.name}")
+        
+        with st.expander("📋 View Uploaded Data", expanded=True):
+            st.dataframe(df, use_container_width=True)
+        
+        required_cols = ['Order ID', 'Offer ID', 'First Name', 'Last Name', 'Address 1', 
+                         'City', 'State', 'Postal Code', 'Country', 'Quantity']
+        missing_cols = [col for col in required_cols if col not in df.columns]
+        
+        if missing_cols:
+            st.error(f"Missing Required Columns: {', '.join(missing_cols)}")
+            st.info(f"**Available columns in your file:** {', '.join(df.columns)}")
             st.stop()
-    
-    # Filters in main area
-    st.subheader("🔍 Filter Orders")
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        status = st.selectbox(
-            "Order Status",
-            options=["All", "Unprocessed", "Processed", "PartiallyShipped", "Complete", "Canceled"],
-            index=0
-        )
-    
-    with col2:
-        carrier_code = st.text_input(
-            "Carrier Code (optional)",
-            placeholder="e.g., U11, R02",
-            help="Leave empty for all carriers"
-        )
-    
-    with col3:
-        use_date_filter = st.checkbox("Filter by Date Range")
-    
-    start_date = None
-    end_date = None
-    
-    if use_date_filter:
-        col_date1, col_date2 = st.columns(2)
-        with col_date1:
-            start_date_input = st.date_input(
-                "Start Date",
-                value=datetime.now().date() - timedelta(days=7)
-            )
-        with col_date2:
-            end_date_input = st.date_input(
-                "End Date",
-                value=datetime.now().date()
-            )
         
-        start_date = f"{start_date_input}T00:00:00"
-        end_date = f"{end_date_input}T23:59:59"
-    
-    # Fetch button
-    col_btn1, col_btn2, col_btn3 = st.columns([1, 1, 4])
-    with col_btn1:
-        fetch_orders = st.button("🔄 Fetch Orders", type="primary", use_container_width=True)
-    with col_btn2:
-        if st.button("🔍 Check Token", use_container_width=True):
-            is_valid, status_msg = st.session_state.client.check_token_status()
-            if is_valid:
-                st.success(f"✅ Token is valid")
-            else:
-                st.warning(f"⚠️ {status_msg}")
-    
-    st.divider()
-    
-    # Fetch and display orders
-    if fetch_orders:
-        with st.spinner("Fetching orders..."):
-            orders_data, error = st.session_state.client.get_orders(
-                status=status if status != "All" else None,
-                carrier_code=carrier_code if carrier_code else None,
-                start_date=start_date,
-                end_date=end_date
-            )
+        grouped = df.groupby(['Order ID', 'Offer ID'], as_index=False).agg({
+            'First Name': 'first',
+            'Last Name': 'first',
+            'Address 1': 'first',
+            'Address 2': 'first',
+            'Address 3': 'first',
+            'City': 'first',
+            'State': 'first',
+            'Postal Code': 'first',
+            'Country': 'first',
+            'Quantity': 'sum',
+            'Reference #': 'first',
+            'Order Comments': 'first'
+        })
         
-        if error:
-            st.error(f"❌ {error}")
-        elif orders_data:
-            st.session_state.orders_data = orders_data
-            orders = orders_data.get('Orders', [])
+        #with st.expander("View Grouped Orders (Combined Line Items)"):
+            #st.dataframe(grouped, use_container_width=True)
+        
+        unique_orders = grouped['Order ID'].unique()
+        
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Unique Orders", len(unique_orders))
+        col2.metric("Total Line Items", len(grouped))
+        col3.metric("Total Quantity", int(grouped['Quantity'].sum()))
+        
+        st.markdown("---")
+        
+        if st.button("Submit All Orders", type="primary", use_container_width=True):
+            progress_bar = st.progress(0)
+            status_text = st.empty()
             
-            if orders:
-                st.success(f"✅ Found {len(orders)} order(s)")
+            results = {
+                'success': [],
+                'failed': [],
+                'error_details': []
+            }
+            
+            for idx, order_id in enumerate(unique_orders):
+                status_text.text(f"Processing order {idx + 1} of {len(unique_orders)}: {order_id}")
                 
-                # Display summary table
-                st.subheader("Orders Summary")
-                df = parse_orders_to_dataframe(orders_data)
-                st.dataframe(df, use_container_width=True, hide_index=True)
+                order_offers = grouped[grouped['Order ID'] == order_id].to_dict('records')
+                xml = generate_order_xml(USERNAME, PASSWORD, str(order_id), order_offers)
                 
-                # Download button for CSV
-                csv = df.to_csv(index=False)
+                try:
+                    response = requests.post(
+                        "https://rhu335.veracore.com/pmomsws/OMS.asmx",
+                        data=xml.encode('utf-8'),
+                        headers={
+                            'Content-Type': 'text/xml; charset=utf-8',
+                            'SOAPAction': 'http://omscom/AddOrder'
+                        },
+                        timeout=30
+                    )
+                    
+                    if response.status_code == 200:
+                        if 'soap:Fault' not in response.text:
+                            results['success'].append(str(order_id))
+                        else:
+                            results['failed'].append(str(order_id))
+                            
+                            fault_string = ""
+                            if '<faultstring>' in response.text:
+                                start = response.text.find('<faultstring>') + 13
+                                end = response.text.find('</faultstring>')
+                                fault_string = response.text[start:end]
+                            
+                            results['error_details'].append({
+                                'order_id': str(order_id),
+                                'status': response.status_code,
+                                'error': fault_string if fault_string else 'SOAP Fault (see details)',
+                                'full_response': response.text,
+                                'offers': order_offers
+                            })
+                    else:
+                        results['failed'].append(str(order_id))
+                        results['error_details'].append({
+                            'order_id': str(order_id),
+                            'status': response.status_code,
+                            'error': f'HTTP Error {response.status_code}',
+                            'full_response': response.text,
+                            'offers': order_offers
+                        })
+                        
+                except Exception as e:
+                    results['failed'].append(str(order_id))
+                    results['error_details'].append({
+                        'order_id': str(order_id),
+                        'status': 'Exception',
+                        'error': str(e),
+                        'full_response': '',
+                        'offers': order_offers
+                    })
+                
+                progress_bar.progress((idx + 1) / len(unique_orders))
+            
+            status_text.empty()
+            progress_bar.empty()
+            
+            st.markdown("---")
+            st.subheader("📊 Submission Results")
+            
+            col1, col2 = st.columns(2)
+            col1.metric("✅ Successfully Submitted", len(results['success']), delta=None, delta_color="normal")
+            col2.metric("❌ Failed", len(results['failed']), delta=None, delta_color="inverse")
+            
+            if len(results['failed']) == 0:
+                st.success("🎉 All orders submitted successfully!")
+                with st.expander("✅ View Successful Orders"):
+                    for order_id in results['success']:
+                        st.text(f"• Order ID: {order_id}")
+            else:
+                st.error(f"⚠️ {len(results['failed'])} order(s) failed to submit. Please review the errors below.")
+                
+                if results['success']:
+                    with st.expander("✅ View Successful Orders"):
+                        for order_id in results['success']:
+                            st.text(f"• Order ID: {order_id}")
+                
+                st.markdown("### ❌ Failed Orders - Detailed Error Report")
+                
+                for error_detail in results['error_details']:
+                    with st.expander(f"🔴 Order ID: {error_detail['order_id']} - Status: {error_detail['status']}", expanded=True):
+                        st.error(f"**Error:** {error_detail['error']}")
+                        
+                        st.markdown("**Order Details:**")
+                        error_df = pd.DataFrame(error_detail['offers'])
+                        st.dataframe(error_df, use_container_width=True)
+                        
+                        st.markdown("**Full Server Response:**")
+                        st.code(error_detail['full_response'], language='xml')
+                        
+                        st.markdown("**Troubleshooting Tips:**")
+                        if 'InvalidLogin' in error_detail['error']:
+                            st.warning("• Check that your API credentials are correct")
+                        elif 'Offer' in error_detail['error'] or 'Product' in error_detail['error']:
+                            st.warning("• Verify that all Product/Offer IDs exist in the system")
+                        elif 'Address' in error_detail['error']:
+                            st.warning("• Check that all address fields are properly filled")
+                        else:
+                            st.warning("• Contact support with this error message")
+                
+                failed_df = pd.DataFrame([{
+                    'Order ID': e['order_id'],
+                    'Status': e['status'],
+                    'Error Summary': e['error'][:100] + '...' if len(e['error']) > 100 else e['error']
+                } for e in results['error_details']])
+                
+                st.markdown("### 📥 Download Failed Orders Report")
+                csv = failed_df.to_csv(index=False)
                 st.download_button(
-                    label="📥 Download as CSV",
+                    label="Download Error Report (CSV)",
                     data=csv,
-                    file_name=f"orders_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    file_name=f"failed_orders_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                     mime="text/csv"
                 )
-                
-                # Detailed view
-                st.divider()
-                st.subheader("Order Details")
-                
-                selected_order = st.selectbox(
-                    "Select an order to view details",
-                    options=range(len(orders)),
-                    format_func=lambda i: f"Order #{orders[i]['ID']} - {orders[i]['CurrentOrderStatus']}"
-                )
-                
-                if selected_order is not None:
-                    display_order_details(orders[selected_order])
-            else:
-                st.info("ℹ️ No orders found matching the criteria.")
-        else:
-            st.error("❌ No data received from API")
     
-    elif st.session_state.orders_data:
-        # Display previously fetched data
-        orders = st.session_state.orders_data.get('Orders', [])
-        if orders:
-            st.info(f"Showing {len(orders)} previously fetched order(s). Click 'Fetch Orders' to refresh.")
-            
-            df = parse_orders_to_dataframe(st.session_state.orders_data)
-            st.dataframe(df, use_container_width=True, hide_index=True)
-            
-            csv = df.to_csv(index=False)
-            st.download_button(
-                label="📥 Download as CSV",
-                data=csv,
-                file_name=f"orders_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                mime="text/csv"
-            )
-            
-            st.divider()
-            st.subheader("Order Details")
-            selected_order = st.selectbox(
-                "Select an order to view details",
-                options=range(len(orders)),
-                format_func=lambda i: f"Order #{orders[i]['ID']} - {orders[i]['CurrentOrderStatus']}"
-            )
-            
-            if selected_order is not None:
-                display_order_details(orders[selected_order])
-    else:
-        st.info("👆 Select your filters and click 'Fetch Orders' to begin.")
+    except Exception as e:
+        st.error(f"❌ Error processing file: {str(e)}")
+        st.info("Please ensure your CSV file is properly formatted and try again.")
 
-if __name__ == "__main__":
-    main()
+else:
+    st.info("👆 Please upload a CSV file to begin")
+    
+    st.markdown("---")
+    st.subheader("📝 CSV File Requirements")
+    
+    st.markdown("""
+    Your CSV file must include the following columns:
+    
+    **Required Columns:**
+    - Order ID
+    - First Name
+    - Last Name
+    - Address 1
+    - City
+    - State
+    - Postal Code
+    - Country
+    - Offer ID (Product ID)
+    - Quantity
+    
+    **Optional Columns:**
+    - Address 2
+    - Address 3
+    - Reference #
+    - Order Comments
+    """)

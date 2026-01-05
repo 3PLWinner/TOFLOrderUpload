@@ -1,1 +1,2 @@
-# To check order statuses
+# Order Upload Web App
+For CUS598 - SFDW Inc to upload orders
