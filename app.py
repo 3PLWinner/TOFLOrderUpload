@@ -79,9 +79,14 @@ def generate_order_xml(username, password, order_id, offers):
                             <FieldName>Order Type</FieldName>
                         </VariableField>
                         <Value>True</Value>
-                        <ValueDescription>B2B</ValueDescription>
+                        <ValueDescription>SFDWInc</ValueDescription>
                     </OrderVariable>
                 </OrderVariables>
+                <Shipping>
+                    <FreightCarrier>
+                        <Name>{escape_xml(first.get('Freight Carrier', ''))}</Name>
+                    </FreightCarrier>
+                </Shipping>
                 <OrderedBy>
                     <FirstName>{escape_xml(first.get('First Name', ''))}</FirstName>
                     <LastName>{escape_xml(first.get('Last Name', ''))}</LastName>
@@ -124,7 +129,7 @@ if uploaded_file:
             st.dataframe(df, use_container_width=True)
         
         required_cols = ['Order ID', 'Offer ID', 'First Name', 'Last Name', 'Address 1', 
-                         'City', 'State', 'Postal Code', 'Country', 'Quantity']
+                         'City', 'State', 'Postal Code', 'Country', 'Quantity', 'Freight Carrier']
         missing_cols = [col for col in required_cols if col not in df.columns]
         
         if missing_cols:
@@ -143,6 +148,7 @@ if uploaded_file:
             'Postal Code': 'first',
             'Country': 'first',
             'Quantity': 'sum',
+            'Freight Carrier': 'first',
             'Reference #': 'first',
             'Order Comments': 'first'
         })
@@ -312,7 +318,8 @@ else:
     - Country
     - Offer ID (Product ID)
     - Quantity
-    
+    - Freight Carrier
+
     **Optional Columns:**
     - Address 2
     - Address 3
